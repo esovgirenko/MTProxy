@@ -70,6 +70,8 @@ SOCKS5_PORT=1080 sudo -E bash install.sh --socks5
   ```
 Создаётся системный пользователь; Dante проверяет логин/пароль через PAM. В Telegram при добавлении SOCKS5-прокси укажите этот логин и пароль.
 
+**Важно:** в Dante для авторизации меняется только **socksmethod: username**. Параметр **clientmethod** должен оставаться **none** (значение `username` для clientmethod в Dante не поддерживается и приводит к ошибке запуска).
+
 ### Включить автоматическое обновление
 
 Раз в неделю будут обновляться пакеты и код прокси, сервис перезапускаться при необходимости:
@@ -107,7 +109,7 @@ sudo bash install.sh --enable-auto-update
 | SOCKS5: статус  | `sudo systemctl status danted` |
 | SOCKS5: перезапуск | `sudo systemctl restart danted` |
 
-**Если SOCKS5 не подключается:** на многих VPS интерфейс не `eth0`, а `ens3` или `ens5`. В конфиге должны быть глобальные строки `clientmethod: none` и `socksmethod: none`, и в `external:` — ваш интерфейс. См. раздел «SOCKS5 не работает» ниже.
+**Если SOCKS5 не подключается:** проверьте интерфейс в `external:` (часто `ens3`, а не `eth0`) и что в конфиге есть `clientmethod: none` и `socksmethod: none` (без авторизации) или только `socksmethod: username` при авторизации — **clientmethod** всегда оставляйте **none**. См. раздел «SOCKS5 не работает» ниже.
 
 ---
 
@@ -185,6 +187,7 @@ TLS_DOMAIN = "www.cloudflare.com"
 | `/etc/systemd/system/mtprotoproxy.service` | Юнит systemd |
 | `/etc/logrotate.d/mtprotoproxy` | Ротация логов |
 | `/etc/cron.weekly/mtprotoproxy-update` | Скрипт еженедельного обновления (если включён `--enable-auto-update`) |
+| `/etc/danted.conf` | Конфиг SOCKS5 (Dante); при авторизации: `socksmethod: username`, `clientmethod: none` |
 
 ---
 
@@ -240,14 +243,13 @@ journalctl -u mtprotoproxy -n 50
    `sudo systemctl status danted`  
    Если `failed` или `inactive`, смотрите логи: `journalctl -u danted -n 30`.
 
-2. **Правильный конфиг.** В `/etc/danted.conf` должны быть:
+2. **Правильный конфиг** `/etc/danted.conf`:
    - **Интерфейс** в `external:` — тот, через который сервер выходит в интернет (часто не `eth0`, а `ens3` или `ens5`). Узнать:  
      `ip route get 8.8.8.8 | awk '{print $5; exit}'`
-   - **Глобально** (до блоков `client pass` / `socks pass`) строки:  
-     `clientmethod: none` и `socksmethod: none`  
-   Без них Dante не принимает подключения без логина.
+   - **Без авторизации:** глобально должны быть `clientmethod: none` и `socksmethod: none`.
+   - **С авторизацией (логин/пароль):** только `socksmethod: username`; **clientmethod обязательно оставьте none** — в Dante значение `username` для clientmethod не поддерживается (ошибка «method username is not a valid»).
 
-   Заменить конфиг целиком (подставьте свой интерфейс вместо `ens3` и при необходимости порт):
+   **Пример конфига без авторизации** (подставьте свой интерфейс и порт):
 
    ```bash
    IFACE=$(ip route get 8.8.8.8 | awk '{print $5; exit}')
@@ -265,6 +267,23 @@ journalctl -u mtprotoproxy -n 50
    sudo systemctl restart danted
    sudo systemctl status danted
    ```
+
+   **Включить авторизацию на уже установленном SOCKS5:**
+
+   ```bash
+   # 1) Создать пользователя и пароль
+   sudo useradd -r -s /bin/false myuser
+   echo "myuser:YourPassword" | sudo chpasswd
+
+   # 2) В конфиге изменить ТОЛЬКО socksmethod (clientmethod оставить none)
+   sudo sed -i 's/socksmethod: none/socksmethod: username/' /etc/danted.conf
+
+   # 3) Перезапустить Dante
+   sudo systemctl restart danted
+   sudo systemctl status danted
+   ```
+
+   В Telegram в настройках SOCKS5 укажите логин `myuser` и пароль `YourPassword`.
 
 3. **Проверка с сервера:**  
    Без авторизации:  
@@ -316,8 +335,16 @@ curl -s URL_СКРИПТА | sudo bash
 PORT=9123 AD_TAG="тег" sudo -E bash install.sh
 sudo bash install.sh --enable-auto-update
 
+# SOCKS5 без авторизации
+sudo bash install.sh --socks5
+
+# SOCKS5 с авторизацией (свой или случайный логин/пароль)
+SOCKS5_USER=myuser SOCKS5_PASS=mypass sudo -E bash install.sh --socks5
+sudo bash install.sh --socks5 --socks5-auth
+
 # После установки
 sudo systemctl status mtprotoproxy
+sudo systemctl status danted
 journalctl -u mtprotoproxy -f
 nc -zv ВАШ_IP ПОРТ
 ```
