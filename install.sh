@@ -129,6 +129,7 @@ write_config() {
 PORT = $port
 USERS = {"tg": "$secret_hex"}
 MODES = {"classic": False, "secure": False, "tls": True}
+TLS_DOMAIN = "www.cloudflare.com"
 EOF
   if [[ -n "${AD_TAG:-}" ]]; then
     echo "AD_TAG = \"$AD_TAG\"" >> "$INSTALL_DIR/config.py"
