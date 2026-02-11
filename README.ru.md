@@ -44,6 +44,32 @@ PORT=9123 AD_TAG="ваш-тег-от-MTProxybot" sudo -E bash install.sh
 - **PORT** — порт прокси (9000–9999). Если не указан, выбирается случайный свободный.
 - **AD_TAG** — тег рекламы из [@MTProxybot](https://t.me/MTProxybot) в Telegram (для статистики и монетизации).
 
+### Включить SOCKS5 (рекомендуется для видео)
+
+Через MTProto видео иногда грузится медленно. SOCKS5 на том же сервере часто даёт более стабильную загрузку медиа в Telegram.
+
+Установка с SOCKS5 (порт по умолчанию 1080 или свой):
+
+```bash
+sudo bash install.sh --socks5
+# или свой порт:
+SOCKS5_PORT=1080 sudo -E bash install.sh --socks5
+```
+
+После установки в выводе появится блок **SOCKS5 proxy**: IP, порт. По умолчанию — без логина и пароля. В Telegram: **Настройки → Прокси → SOCKS5** — укажите сервер и порт; при включённой авторизации введите логин и пароль.
+
+**Авторизация SOCKS5 (логин/пароль):**
+
+- Свои логин и пароль (задаются до установки):
+  ```bash
+  SOCKS5_USER=myuser SOCKS5_PASS=mypass sudo -E bash install.sh --socks5
+  ```
+- Случайный пароль (логин `socks5`, пароль выведен в конце):
+  ```bash
+  sudo bash install.sh --socks5 --socks5-auth
+  ```
+Создаётся системный пользователь; Dante проверяет логин/пароль через PAM. В Telegram при добавлении SOCKS5-прокси укажите этот логин и пароль.
+
 ### Включить автоматическое обновление
 
 Раз в неделю будут обновляться пакеты и код прокси, сервис перезапускаться при необходимости:
@@ -67,8 +93,8 @@ sudo bash install.sh --enable-auto-update
 
 **Пример подключения в Telegram:**
 
-1. Откройте ссылку `tg://proxy?server=...` в браузере или из другого приложения.
-2. Или: Настройки → Данные и память → Использовать прокси → Добавить прокси → MTProto — вставьте IP, порт и секрет.
+- **MTProto** (ссылка из вывода скрипта): откройте `tg://proxy?server=...` или Настройки → Прокси → MTProto — IP, порт, секрет.
+- **SOCKS5** (если установлен `--socks5`): Настройки → Прокси → SOCKS5 — укажите IP и порт (например 1080). Если при установке была включена авторизация (`SOCKS5_USER`/`SOCKS5_PASS` или `--socks5-auth`) — введите выданный логин и пароль. Удобно для просмотра видео.
 
 ---
 
@@ -76,11 +102,12 @@ sudo bash install.sh --enable-auto-update
 
 | Действие        | Команда |
 |-----------------|--------|
-| Статус          | `sudo systemctl status mtprotoproxy` |
-| Запуск          | `sudo systemctl start mtprotoproxy`  |
-| Остановка       | `sudo systemctl stop mtprotoproxy`    |
-| Перезапуск      | `sudo systemctl restart mtprotoproxy` |
-| Логи в реальном времени | `journalctl -u mtprotoproxy -f` |
+| MTProto: статус | `sudo systemctl status mtprotoproxy` |
+| MTProto: логи   | `journalctl -u mtprotoproxy -f` |
+| SOCKS5: статус  | `sudo systemctl status danted` |
+| SOCKS5: перезапуск | `sudo systemctl restart danted` |
+
+**Если SOCKS5 не подключается:** на многих VPS интерфейс не `eth0`, а `ens3` или `ens5`. В конфиге должны быть глобальные строки `clientmethod: none` и `socksmethod: none`, и в `external:` — ваш интерфейс. См. раздел «SOCKS5 не работает» ниже.
 
 ---
 
@@ -207,6 +234,45 @@ journalctl -u mtprotoproxy -n 50
    `sudo systemctl start mtprotoproxy`  
    Новую ссылку сформируйте вручную, подставив IP, новый порт и новый секрет (префикс `ee` + 32 hex или `dd` + 32 hex).
 
+### SOCKS5 не работает
+
+1. **Проверьте сервис:**  
+   `sudo systemctl status danted`  
+   Если `failed` или `inactive`, смотрите логи: `journalctl -u danted -n 30`.
+
+2. **Правильный конфиг.** В `/etc/danted.conf` должны быть:
+   - **Интерфейс** в `external:` — тот, через который сервер выходит в интернет (часто не `eth0`, а `ens3` или `ens5`). Узнать:  
+     `ip route get 8.8.8.8 | awk '{print $5; exit}'`
+   - **Глобально** (до блоков `client pass` / `socks pass`) строки:  
+     `clientmethod: none` и `socksmethod: none`  
+   Без них Dante не принимает подключения без логина.
+
+   Заменить конфиг целиком (подставьте свой интерфейс вместо `ens3` и при необходимости порт):
+
+   ```bash
+   IFACE=$(ip route get 8.8.8.8 | awk '{print $5; exit}')
+   sudo tee /etc/danted.conf << EOF
+   logoutput: syslog
+   user.privileged: root
+   user.unprivileged: nobody
+   internal: 0.0.0.0 port = 1080
+   external: $IFACE
+   clientmethod: none
+   socksmethod: none
+   client pass { from: 0.0.0.0/0 to: 0.0.0.0/0 log: error }
+   socks pass { from: 0.0.0.0/0 to: 0.0.0.0/0 log: error }
+   EOF
+   sudo systemctl restart danted
+   sudo systemctl status danted
+   ```
+
+3. **Проверка с сервера:**  
+   Без авторизации:  
+   `curl -x socks5://127.0.0.1:1080 -s -o /dev/null -w "%{http_code}" https://api.telegram.org`  
+   С авторизацией:  
+   `curl -x socks5://ЛОГИН:ПАРОЛЬ@127.0.0.1:1080 -s -o /dev/null -w "%{http_code}" https://api.telegram.org`  
+   Должно вывести `200`, `302` или другой код ответа (не ошибку соединения).
+
 ### Полное удаление прокси
 
 Если у вас есть скрипт `uninstall.sh`:
@@ -226,7 +292,8 @@ sudo rm -f /etc/cron.weekly/mtprotoproxy-update
 sudo rm -rf /opt/mtprotoproxy
 sudo userdel mtproto-proxy 2>/dev/null || true
 sudo systemctl daemon-reload
-# При необходимости удалите правило UFW для порта прокси
+# Если ставили SOCKS5: sudo systemctl stop danted && sudo apt remove -y dante-server
+# При необходимости удалите правила UFW для портов прокси
 ```
 
 ---
